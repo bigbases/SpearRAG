@@ -8,25 +8,6 @@ runs only on the query-induced subgraph, so retrieval cost is bounded by the sub
 (HotpotQA fullwiki, ~350M tokens: 1.35 s/query vs LinearRAG 40.8 s, with higher R@5).
 Final numbers: [`docs/RESULTS.md`](docs/RESULTS.md).
 
-## Method → code
-
-```
-[Offline]  Entity-Shared Passage Graph Construction
-[Online]   ① Entity Bridging (E)  →  ② Subgraph Propagation (SP)  →  ③ Adaptive Reranking (AR)
-```
-
-| Module | Component | What it does | Code |
-|---|---|---|---|
-| Offline | Entity Extraction | spaCy NER; entity / sentence / passage stores and incidence matrices | `SpearRAGRetriever.index` |
-| | Entity-Shared Passage Graph | passages linked by the cosine of their entity TF-IDF vectors, top-24 neighbours, built block-wise (memory linear in corpus size) | `_build_passage_graph` |
-| ① E | Entity Seeding | question mentions → indexed entities (exact, then embedding match) | `_link_query_entities` |
-| | Bridge Propagation | up to 3 hops along the query-most-similar sentences; finds bridge entities absent from the question | `_bridge_propagation` |
-| | Bridged Candidate Generation | dense top-128 ∪ bridge passages (≤512) ∪ 2 passage-graph neighbours each | `_collect_candidates` |
-| ② SP | Query-Induced Subgraph | candidates + their entities; entity-containment and passage-graph edges | `_subgraph_ppr` |
-| | Subgraph PPR | restart = activated entities 75% + dense top-96 passages 25%, α = 0.85 | `_subgraph_ppr` |
-| ③ AR | Score Fusion | PPR 0.60 / dense 0.18 / entity coverage 0.08 | `_fuse_scores` |
-| | Graph-Aware Listwise Reranker | transformer over the top-128 fused candidates, graph features + pairwise attention bias, trained listwise | `spearrag/reranker.py` |
-
 ## Layout
 
 ```
@@ -57,20 +38,6 @@ Python 3.9, CUDA 11.8 (tested on RTX A4000 16 GB). `pip install -r requirements.
 `pip install cupy-cuda11x` so spaCy's transformer NER runs on the GPU (≈15x faster than CPU).
 On this server everything is installed in the conda env `linearrag`:
 `/root/anaconda3/envs/linearrag/bin/python`.
-
-## Data
-
-`data/` holds, per dataset, a training file for the reranker and the test release:
-
-| dataset | reranker training | test (paper) | test with gold passage ids (R@5) |
-|---|---|---|---|
-| 2wiki | `2wiki_regimetrain.json` | `2wiki_linearrag_regime.json` | `2wiki_linearrag_regime_gold.json` |
-| hotpotqa | `hotpotqa_regimetrain.json` | `hotpotqa_linearrag_regime.json` | `hotpotqa_linearrag_regime_gold.json` |
-| musique | `musique_regimetrain.json` | `musique_linearrag_regime.json` | – |
-| medical | `2wiki_regimetrain.json` (transfer) | `medical_linearrag_regime.json` | – |
-
-Scalability corpora: `haystack_2wiki_{0,1m,5m,10m,20m}.json`, `scale_*.json`, `hotpotqa_fullwiki_regimeA.json`.
-Format: `{"documents": [{"id", "text"}], "queries": [{"question", "answer", "gold_doc_ids"?, ...}]}`.
 
 ## Run
 
