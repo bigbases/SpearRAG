@@ -6,7 +6,6 @@ An LLM-free GraphRAG retriever for multi-hop QA. Indexing uses spaCy NER and sen
 tokens). At query time, global recall comes from entity-bridged candidate generation, and graph propagation
 runs only on the query-induced subgraph, so retrieval cost is bounded by the subgraph instead of the corpus
 (HotpotQA fullwiki, ~350M tokens: 1.35 s/query vs LinearRAG 40.8 s, with higher R@5).
-Final numbers: [`docs/RESULTS.md`](docs/RESULTS.md).
 
 ## Layout
 
