@@ -18,8 +18,7 @@ SpearRAG/
 │   ├── run_spearrag.py       index → train reranker → retrieve → generate → judge  (main tables, ablations)
 │   ├── paired_test.py        per-question paired significance of ablations
 │   ├── measure_indexing.py   cold-start indexing time (scalability)
-│   ├── with_spacy_batch.py   fixed spaCy batch for large corpora
-│   └── check_equivalence.py  proof that this package matches the research code
+│   └── with_spacy_batch.py   fixed spaCy batch for large corpora
 ├── docs/RESULTS.md       final paper numbers
 ├── data/                datasets
 └── requirements.txt
