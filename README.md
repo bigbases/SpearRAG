@@ -1,11 +1,6 @@
-# SpearRAG
+# SpearRAG: Subgraph Propagation with Entity-bridged Adaptive Reranking for Retrieval-Augmented Generation
 
-**SpearRAG: Subgraph Propagation with Entity-bridged Adaptive Reranking Retrieval-Augmented Generation**
-
-An LLM-free GraphRAG retriever for multi-hop QA. Indexing uses spaCy NER and sentence embeddings only (0 LLM
-tokens). At query time, global recall comes from entity-bridged candidate generation, and graph propagation
-runs only on the query-induced subgraph, so retrieval cost is bounded by the subgraph instead of the corpus
-(HotpotQA fullwiki, ~350M tokens: 1.35 s/query vs LinearRAG 40.8 s, with higher R@5).
+> Graph-based retrieval-augmented generation (RAG) links evidence across documents for multi-hop question answering but is costly at scale. Knowledge graphs built with large language models (LLMs) cost tokens in proportion to corpus size; LLM-free systems avoid this cost but rely on propagation over the whole graph, typically Personalized PageRank (PPR), a random walk that restarts from the query’s entities, both to reach distant evidence and to rank it, so per-query latency grows with the corpus. We present SpearRAG (Subgraph Propagation with Entity-bridged Adaptive Reranking for RAG), an LLM-free graph-based RAG framework that decouples corpus-wide evidence discovery from graph propagation. Over an entity-shared passage graph built in linear time, entity-bridged candidate generation combines dense retrieval with multi-hop entity expansion to collect a query-induced subgraph; subgraph propagation runs the same PPR only there, and adaptive reranking with a learned listwise reranker selects the evidence. As distractors grow a 2Wiki corpus from 0.75M to 40.75M tokens, the per-query latency of SpearRAG grows only 2.1×, versus 22.7× for LinearRAG, the strongest baseline, so its speedup widens from 1.4× to 14.5×; on the 350M-token HotpotQA Wikipedia corpus, it is 47× faster (0.87 s vs. 40.8 s) and retrieves more gold evidence at comparable answer accuracy. On four benchmarks, SpearRAG is also the most accurate system on 2WikiMultiHopQA and Medical, the most accurate LLM-free system on MuSiQue, and within 0.6 points of the best on HotpotQA, with a significant macro-averaged gain, and indexes as fast as the other LLM-free systems with zero LLM tokens.
 
 ## Layout
 
@@ -26,7 +21,7 @@ SpearRAG/
 │   ├── with_spacy_batch.py   fixed spaCy batch for large corpora
 │   └── check_equivalence.py  proof that this package matches the research code
 ├── docs/RESULTS.md       final paper numbers
-├── data -> ../handover/data   datasets (symlink)
+├── data/                datasets
 └── requirements.txt
 ```
 
@@ -35,29 +30,31 @@ SpearRAG/
 Python 3.9, CUDA 11.8 (tested on RTX A4000 16 GB). `pip install -r requirements.txt`, then
 `python -m spacy download en_core_web_trf` (Medical also needs `en_core_sci_scibert` from scispaCy) and
 `pip install cupy-cuda11x` so spaCy's transformer NER runs on the GPU (≈15x faster than CPU).
-On this server everything is installed in the conda env `linearrag`:
-`/root/anaconda3/envs/linearrag/bin/python`.
 
 ## Run
 
+The paper uses at most 20 PPR iterations ($T_{\max}$ = 20, Table 1 of the paper), while `SpearRAGConfig` defaults to
+`ppr_max_iterations = 80`. Pass `--overrides '{"ppr_max_iterations": 20}'` (as below) to reproduce the paper's setting.
+
 ```bash
-cd /workspace/GraphRAG/SpearRAG
-PY=/root/anaconda3/envs/linearrag/bin/python
+cd SpearRAG
+PY=python
 export OPENAI_API_KEY=...          # only needed for generation/judging
+PAPER='{"ppr_max_iterations": 20}'  # paper setting (T_max = 20)
 
 # main table (one row): ~10 min per seed per dataset, ~$0.95 per seed (Medical ~$2)
-$PY scripts/run_spearrag.py --dataset 2wiki --seeds 42,43
+$PY scripts/run_spearrag.py --dataset 2wiki --seeds 42,43,44 --overrides "$PAPER"
 
 # ablations: no_bridge | no_candidate_generation | no_subgraph_ppr | no_graph_features | no_rerank
-$PY scripts/run_spearrag.py --dataset hotpotqa --ablation no_subgraph_ppr
+$PY scripts/run_spearrag.py --dataset hotpotqa --ablation no_subgraph_ppr --overrides "$PAPER"
 $PY scripts/paired_test.py --ablations no_bridge no_candidate_generation no_subgraph_ppr no_graph_features no_rerank
 
 # retrieval only ($0): R@5 / Complete@5 and timing; --ppr-scope global is the subgraph-vs-global control
-$PY scripts/run_spearrag.py --dataset 2wiki --test-data-file 2wiki_linearrag_regime_gold.json --skip-generation
-$PY scripts/run_spearrag.py --dataset 2wiki --test-data-file 2wiki_linearrag_regime_gold.json --skip-generation --ppr-scope global
+$PY scripts/run_spearrag.py --dataset 2wiki --test-data-file 2wiki_linearrag_regime_gold.json --skip-generation --overrides "$PAPER"
+$PY scripts/run_spearrag.py --dataset 2wiki --test-data-file 2wiki_linearrag_regime_gold.json --skip-generation --ppr-scope global --overrides "$PAPER"
 
 # large corpora: fix the spaCy batch (a 16 GB GPU runs out of memory otherwise)
-$PY scripts/with_spacy_batch.py 128 scripts/run_spearrag.py --dataset 2wiki --test-data-file haystack_2wiki_20m.json --skip-generation
+$PY scripts/with_spacy_batch.py 128 scripts/run_spearrag.py --dataset 2wiki --test-data-file haystack_2wiki_20m.json --skip-generation --overrides "$PAPER"
 $PY scripts/with_spacy_batch.py 128 scripts/measure_indexing.py --corpus data/scale_5m.json
 ```
 
@@ -69,13 +66,14 @@ Library use:
 
 ```python
 from sentence_transformers import SentenceTransformer
-from spearrag import ProjectConfig, SpearRAGRetriever
+from spearrag import ProjectConfig, SpearRAGRetriever, SpearRAGConfig
 from spearrag.reranker import (RerankerConfig, FeatureExtractor, AdaptiveReranker, build_examples,
                                create_reranker, train_reranker, doc_index_gold_resolver, seed_everything)
 
 emb = SentenceTransformer("all-mpnet-base-v2")
-train_r = SpearRAGRetriever(ProjectConfig("train", emb)); train_r.index(train_passages)
-test_r = SpearRAGRetriever(ProjectConfig("test", emb));   test_r.index(test_passages)
+rcfg = SpearRAGConfig(ppr_max_iterations=20)   # paper setting (T_max = 20)
+train_r = SpearRAGRetriever(ProjectConfig("train", emb), rcfg); train_r.index(train_passages)
+test_r = SpearRAGRetriever(ProjectConfig("test", emb), rcfg);   test_r.index(test_passages)
 cfg = RerankerConfig()
 ext = FeatureExtractor(train_r, cfg)
 resolve = doc_index_gold_resolver({doc_id: i for i, doc_id in enumerate(train_doc_ids)})
@@ -86,28 +84,12 @@ top5 = AdaptiveReranker(test_r, model, cfg).retrieve([{"question": "..."}])[0]["
 ```
 Passages are indexed as `"{i}:{text}"`; the leading index is how gold ids and R@5 are resolved.
 
-## Reproducibility notes
 
-* **Equivalence with the research code.** The paper's numbers were produced by the research folder
-  (`handover/`: `commurag/qacf_rag.py`, `commurag/qacf_listwise_reranker.py`, `final_test_eval.py --no-community`).
-  This package is that configuration with the unused community machinery removed. `scripts/check_equivalence.py`
-  indexes a corpus with both and compares every question's candidates, PPR, coverage, fused scores, fused ranking
-  and reranker inputs; see `results/equivalence_2wiki.json`.
-* **Reranker input width.** Under `--no-community` the research reranker received three community features as
-  constant zeros (`community_route_z`, `inverse_community_size`, pair `same_community`). They are removed here
-  (11 scalar + 4 pair features instead of 13 + 5). A zero input contributes nothing to the network, so the model
-  family is unchanged; checkpoints from the research code are not loadable here.
-* **Seeding.** The research script created the reranker before seeding, so its initial weights were not
-  controlled by `--seeds`: on 2Wiki two runs with identical reranker inputs gave R@5 91.63 vs 91.64 while 16% of
-  top-5 sets differed. `run_spearrag.py` seeds before model creation; whether seeded GPU runs are then bit-identical
-  has not been verified, so report several seeds.
-* **Generation prompt and judge** are copied unchanged from the research script (CoT prompt, 0/1 gpt-4o-mini judge).
-* **Paper-run deviation:** the original fused-candidate truncation (only when > 4096 candidates) included a
-  community bonus; it can never trigger here (dense 128 + bridge 512 + neighbours ≤ 1,280 < 4,096) and is omitted.
+## Pairwise selection term
 
-## Known property worth checking
-
-With the paper's listwise-only objective, the reranker's pairwise head (`pair_query`, `pair_key`, `pair_edge`)
-receives no gradient, yet greedy selection adds `0.35 × sigmoid(pair logit)` after the first pick. That term
-therefore comes from the head's initial weights. Training it (`pair_loss_weight > 0`) or setting
-`pair_selection_weight = 0` are both untested here.
+With the paper's listwise-only objective, the reranker's pairwise compatibility head (`pair_query`, `pair_key`,
+`pair_edge`) receives no gradient, yet greedy selection adds `0.35 × sigmoid(pair logit)` after the first pick
+(η = 0.35, Eq. (17) of the paper), so that term comes from the head's initial weights. As reported in the paper
+(Section 4.5), setting `pair_selection_weight = 0` changes the top-5 for only 1.3–3.1% of questions and accuracy by at
+most 0.70 points; candidate interactions are captured mainly by the listwise attention. Training the head
+(`pair_loss_weight > 0`) is untested.
